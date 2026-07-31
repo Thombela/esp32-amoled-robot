@@ -27,6 +27,10 @@ def main():
     ap.add_argument("macro_prefix")
     ap.add_argument("--size", help="WxH, e.g. 480x480")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--append", action="store_true",
+                     help="Append this array to an existing --out file instead of "
+                          "overwriting it (skips the #pragma once/#include preamble). "
+                          "Use for a second image sharing one generated header.")
     args = ap.parse_args()
 
     size = None
@@ -35,10 +39,10 @@ def main():
         size = (int(w), int(h))
 
     w, h, pixels = convert(args.input, size)
-    lines = [
-        "#pragma once",
-        "#include <stdint.h>",
-        "",
+    lines = []
+    if not args.append:
+        lines += ["#pragma once", "#include <stdint.h>", ""]
+    lines += [
         f"#define {args.macro_prefix}_W {w}",
         f"#define {args.macro_prefix}_H {h}",
         f"// Opaque RGB565 (little-endian), no alpha -- {w*h} pixels",
@@ -47,9 +51,12 @@ def main():
     for i in range(0, len(pixels), 12):
         lines.append("    " + ", ".join(f"0x{p:04X}" for p in pixels[i:i + 12]) + ",")
     lines.append("};")
-    with open(args.out, "w") as f:
+    mode = "a" if args.append else "w"
+    with open(args.out, mode) as f:
+        if args.append:
+            f.write("\n")
         f.write("\n".join(lines) + "\n")
-    print(f"Wrote {args.out}: {w}x{h} ({args.symbol})")
+    print(f"{'Appended to' if args.append else 'Wrote'} {args.out}: {w}x{h} ({args.symbol})")
 
 
 if __name__ == "__main__":

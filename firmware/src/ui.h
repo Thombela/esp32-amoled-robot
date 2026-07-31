@@ -4,8 +4,10 @@
 
 enum screen_t {
     SCREEN_HOME,
+    SCREEN_LIBRARY,
     SCREEN_CLAUDE,
     SCREEN_SETTINGS,
+    SCREEN_PLACEHOLDER,  // stub screen for apps with no real UI yet (testing only)
     SCREEN_COUNT,
 };
 

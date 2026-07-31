@@ -39,17 +39,8 @@
 #define BAT_ADC_PIN          1
 #define BAT_VOLT_DIVIDER     3.0f
 
-// ---- Audio (ES8311 mono codec + speaker, I2S) ----
-// Pins from Waveshare's factory ES8311 example. No mic path wired (the ES7210
-// mic ADC is a separate chip) — DIN unused.
-#define SND_I2S_MCLK         8
-#define SND_I2S_BCLK         9
-#define SND_I2S_WS           10     // LRCK
-#define SND_I2S_DOUT         12     // ESP → ES8311 (speaker)
-#define SND_I2S_DIN          -1     // unused
-#define SND_PA_PIN           7      // power-amp enable (HIGH = on)
-#define SND_SAMPLE_RATE      44100  // must match the embedded PCM (bell_pcm.h)
-#define SND_ES8311_ADDR      0x18
+// An ES8311 mono codec + speaker sit on the I2C bus (addr 0x18), but the
+// firmware's chime engine was removed to save flash — sound.cpp is a no-op.
 
 // ---- Buttons (active-LOW GPIOs, from the Waveshare button example) ----
 #define BTN_BACK_GPIO        0     // BOOT — primary, Space (PTT)
@@ -63,4 +54,3 @@
 #define BOARD_HAS_IMU              0    // QMI8658 present but unused
 #define BOARD_HAS_BATTERY          1
 #define BOARD_HAS_IO_EXPANDER      0
-#define BOARD_HAS_SOUND            1
