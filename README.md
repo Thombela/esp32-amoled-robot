@@ -229,7 +229,7 @@ Fields: `s` = session %, `sr` = session reset (minutes), `w` = weekly %, `wr` = 
 
 ## Recompiling fonts
 
-The `firmware/src/font_*.c` files are pre-compiled LVGL bitmap fonts.
+The `firmware/src/ui/fonts/font_*.c` files are pre-compiled LVGL bitmap fonts.
 
 ```bash
 npm install -g lv_font_conv
@@ -241,13 +241,13 @@ Generate each one (one at a time — `lv_font_conv` doesn't like loop-driven inv
 # Tiempos Text (titles, 56px)
 lv_font_conv --font assets/TiemposText-400-Regular.otf -r 0x20-0x7E \
   --size 56 --format lvgl --bpp 4 --no-compress \
-  -o firmware/src/font_tiempos_56.c --lv-include "lvgl.h"
+  -o firmware/src/ui/fonts/font_tiempos_56.c --lv-include "lvgl.h"
 
 # Styrene B (panel labels 28, small text 24, minimal 20/14/12)
 for size in 28 24 20 14 12; do
   lv_font_conv --font assets/StyreneB-Regular.otf -r 0x20-0x7E \
     --size $size --format lvgl --bpp 4 --no-compress \
-    -o firmware/src/font_styrene_${size}.c --lv-include "lvgl.h"
+    -o firmware/src/ui/fonts/font_styrene_${size}.c --lv-include "lvgl.h"
 done
 ```
 
@@ -268,7 +268,7 @@ The UI uses a small set of [Lucide](https://lucide.dev) icons (battery states) c
 node tools/png_to_lvgl.js assets/icon_battery_48.png icon_battery_data ICON_BATTERY_W ICON_BATTERY_H
 ```
 
-Default tint is white (`0xFFFFFF`); Lucide PNGs ship as black-on-transparent and would render invisible against the dark UI without it. Pass `--no-tint` for pre-coloured artwork. Battery icons use RGB565A8 (alpha plane) so they blend cleanly over any tile (the indicator sits on top of all three). Paste the converter output into `firmware/src/icons.h`. For a full-screen opaque background image instead, see `tools/img_to_lvgl.py`.
+Default tint is white (`0xFFFFFF`); Lucide PNGs ship as black-on-transparent and would render invisible against the dark UI without it. Pass `--no-tint` for pre-coloured artwork. Battery icons use RGB565A8 (alpha plane) so they blend cleanly over any tile (the indicator sits on top of all three). Paste the converter output into `firmware/src/ui/icons/icons.h`. For a full-screen opaque background image instead, see `tools/img_to_lvgl.py`.
 
 ## Credits
 

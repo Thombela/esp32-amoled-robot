@@ -79,15 +79,54 @@ firmware/src/
     waveshare_amoled_18_c6/ — C6: SH8601 + FT3168 + AXP PKEY + TCA9554 (gates power), no PSRAM
     waveshare_amoled_206/   — CO5300 + FT3168 + AXP PKEY, no IO expander, 32 MB, no rotation
     template/               — copy this to bootstrap a new port
+  ui/                       — app-agnostic shell: ui.{h,cpp} builds the Home/Library
+                              tileview, category popup, app/category registry, nav/overlay
+                              plumbing, and the battery indicator; also owns the Layout
+                              struct/compute_layout()/L and ui_make_panel() toolkit that
+                              apps/ screen-builder code shares (responsive — current
+                              breakpoint: H >= 460 → large, else compact)
+    icons/                    icons.h — battery icon arrays, RGB565A8 with alpha.
+                              app_icons.h — generated (tools/png_to_lvgl.js --no-tint), do
+                              not hand-edit. Library app icons (see the Icons section)
+    backgrounds/              backgrounds.h — generated (tools/img_to_lvgl.py), do not
+                              hand-edit. Home/Library background photos, flat RGB565
+    fonts/                    font_*.c — pre-compiled LVGL 9 bitmap fonts (Tiempos 56/34,
+                              Styrene 28/24/20/14/12)
+    theme/                    theme.h — Anthropic brand color tokens (exposed as the
+                              COL_* macros in ui.h for apps/ to use)
+  apps/                     — one folder per Library app, each with its own sub-folders
+                              for components that need isolation (mirrors boards/<name>/)
+    claude/
+      claude.{h,cpp}          — claude_screen_init(): the tile's daily/weekly % labels
+      usage.{h,cpp}           — usage_apply_json(): parses a usage JSON string (from
+                              either BLE or WiFi) and applies it; the one shared entry
+                              point both ingestion paths call
+      usage_rate.{h,cpp}      — session-reset detection, used only by usage.cpp
+    settings/
+      settings.{h,cpp}        — settings_screen_init()/settings_screen_refresh(): the
+                              brightness/Bluetooth/WiFi status rows
+      wifi/
+        wifi_poll.{h,cpp}     — WiFi HTTP usage-data poller, entirely independent of BLE
+                              ownership. Opt-in via wifi_ssid/wifi_pass/wifi_url/wifi_secret
+                              serial commands; no-op until configured
+      bluetooth/
+        bluetooth_status.{h,cpp} — formats live BLE connection state into the Settings
+                              screen's Bluetooth row
+      brightness/
+        brightness.{h,cpp}    — user-controlled display brightness, persisted to NVS
+  core/                     — cross-cutting runtime infrastructure not tied to one app or
+                              to rendering (so it's not under ui/ or apps/<name>/)
+    ble/
+      ble.{h,cpp}             — NimBLE peripheral: custom data service + HID keyboard.
+                              Shared by the physical-button keyboard, Claude's data
+                              channel, and Settings' Bluetooth status row all at once —
+                              see the Daemon/host-side section for the GATT characteristics
+                              it exposes
+    idle/
+      idle.{h,cpp}, idle_cfg.h — sleep/wake timing + brightness fade, driven by
+                              idle_set_awake_brightness() (see apps/settings/brightness/)
   main.cpp                  — setup() + loop(): HAL calls only, zero #ifdef BOARD_*
-  ui.{h,cpp}                — 2-tile swipeable UI (Home, Library) built on LVGL's lv_tileview, plus full-screen overlays (Claude, Settings) opened by tapping into a Library category. compute_layout() picks fonts/positions from board_caps() (responsive — current breakpoint: H >= 460 → large, else compact)
-  usage.{h,cpp}             — usage_apply_json(): parses a usage JSON string (from either BLE or WiFi) and applies it; the one shared entry point both ingestion paths call
-  wifi_poll.{h,cpp}         — WiFi HTTP usage-data poller, entirely independent of BLE ownership. Opt-in via wifi_ssid/wifi_pass/wifi_url/wifi_secret serial commands; no-op until configured
-  backgrounds.h             — generated (tools/img_to_lvgl.py), do not hand-edit. Home tile's background image, baked into flash as flat RGB565
-  ble.{h,cpp}               — NimBLE peripheral: custom data service + HID keyboard
-  data.h                    — UsageData struct
-  icons.h                   — icon arrays, RGB565A8 with alpha (battery only; anything else needing this format follows the same pattern)
-  font_*.c                  — pre-compiled LVGL 9 bitmap fonts (Tiempos 56/34, Styrene 28/24/20/14/12)
+  data.h                    — UsageData struct, shared by ui/ and apps/claude/
 docs/porting/               — adding-a-board.md, hal-contract.md, capability-flags.md
 ```
 
@@ -143,13 +182,13 @@ root `assets/` tree). Generated `firmware/src/*.h` headers are not hand-edited.
 
 ## Icons
 
-`tools/png_to_lvgl.js <input.png> <symbol> [W_MACRO] [H_MACRO] [--tint=RRGGBB | --no-tint]` converts an alpha PNG to RGB565A8 (needs `npm install --no-save pngjs` in `tools/` first — gitignored, not committed). Default tint is white (`0xFFFFFF`) — necessary for black-on-transparent source PNGs like Lucide icons; pass `--no-tint` for full-color art (app/brand logos) so it renders in its real colors. Splice output into a header and use `init_icon_dsc_rgb565a8()` in ui.cpp. The 5 battery icons use this format, and so do the app icons in `firmware/src/app_icons.h` (6 today: Claude, Settings, WhatsApp, Apple Music, Strava, Photos — real logo PNGs from `assets/apps/`, each already a rounded-square shape with transparent margins baked into its own alpha channel, so `make_app_icon()` in ui.cpp just scales them — no clip-mask wrapper needed, unlike the old opaque-JPEG icons this replaced). This script has no `#pragma once`/`--append` machinery of its own (see `tools/README.md`) — building a multi-icon header means redirecting/appending its raw output and adding the include guard by hand.
+`tools/png_to_lvgl.js <input.png> <symbol> [W_MACRO] [H_MACRO] [--tint=RRGGBB | --no-tint]` converts an alpha PNG to RGB565A8 (needs `npm install --no-save pngjs` in `tools/` first — gitignored, not committed). Default tint is white (`0xFFFFFF`) — necessary for black-on-transparent source PNGs like Lucide icons; pass `--no-tint` for full-color art (app/brand logos) so it renders in its real colors. Splice output into a header and use `init_icon_dsc_rgb565a8()` in ui.cpp. The 5 battery icons use this format, and so do the app icons in `firmware/src/ui/icons/app_icons.h` (6 today: Claude, Settings, WhatsApp, Apple Music, Strava, Photos — real logo PNGs from `assets/apps/`, each already a rounded-square shape with transparent margins baked into its own alpha channel, so `make_app_icon()` in ui.cpp just scales them — no clip-mask wrapper needed, unlike the old opaque-JPEG icons this replaced). This script has no `#pragma once`/`--append` machinery of its own (see `tools/README.md`) — building a multi-icon header means redirecting/appending its raw output and adding the include guard by hand.
 
 ## Backgrounds
 
 `tools/img_to_lvgl.py <input.jpg> <symbol> <MACRO_PREFIX> --size WxH --out <output.h>` converts a photo (any Pillow-readable format) to a flat opaque RGB565 array — no alpha plane, unlike the icon pipeline above. Pass `--append` to add a second (or third) image's array to an existing `--out` file instead of overwriting it — only the first invocation for a given output file omits it.
 
-Output goes to `firmware/src/backgrounds.h`. Two backgrounds are baked today: `bg_home_data` (from `assets/background/bg.jpg`, the Home tile) and `bg_library_data` (from `assets/background/bg-blur.jpg`, a pre-blurred variant used behind the Library screen's category cards). Both are 480×480 and drawn at (0,0) regardless of board size — a per-board-size picker doesn't exist yet, so on non-480×480 boards the image is simply cropped/incomplete, same limitation the single background already had.
+Output goes to `firmware/src/ui/backgrounds/backgrounds.h`. Two backgrounds are baked today: `bg_home_data` (from `assets/background/bg.jpg`, the Home tile) and `bg_library_data` (from `assets/background/bg-blur.jpg`, a pre-blurred variant used behind the Library screen's category cards). Both are 480×480 and drawn at (0,0) regardless of board size — a per-board-size picker doesn't exist yet, so on non-480×480 boards the image is simply cropped/incomplete, same limitation the single background already had.
 
 ## User profile / preferences
 

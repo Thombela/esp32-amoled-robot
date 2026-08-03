@@ -5,13 +5,14 @@
 #include <esp_heap_caps.h>
 
 #include "data.h"
-#include "ui.h"
-#include "ble.h"
-#include "idle.h"
-#include "idle_cfg.h"
-#include "brightness.h"
-#include "usage.h"
-#include "wifi_poll.h"
+#include "ui/ui.h"
+#include "core/ble/ble.h"
+#include "core/idle/idle.h"
+#include "core/idle/idle_cfg.h"
+#include "apps/settings/brightness/brightness.h"
+#include "apps/claude/usage.h"
+#include "apps/claude/claude_poll.h"
+#include "apps/settings/wifi/wifi_poll.h"
 
 #include "hal/board_caps.h"
 #include "hal/display_hal.h"
@@ -216,11 +217,12 @@ void setup() {
     ble_init();
     input_hal_init();
     wifi_poll_init();
+    claude_poll_init();
 
     ui_init();
     ui_update_ble_status(ble_get_state(), ble_get_device_name(), ble_get_mac_address());
     ui_update_battery(power_hal_battery_pct(), power_hal_is_charging());
-    ui_show_screen(SCREEN_HOME);
+    ui_show_screen(SCREEN_CLAUDE);  // TEMP: QA screenshot
 
     Serial.printf("Dashboard ready (%s, %dx%d), waiting for data on BLE...\n",
         board_caps().name, W, H);
@@ -363,6 +365,8 @@ void loop() {
     if (wifi_poll_has_data()) {
         usage_apply_json(wifi_poll_get_data());
     }
+
+    claude_poll_tick();
 
     delay(5);
 }

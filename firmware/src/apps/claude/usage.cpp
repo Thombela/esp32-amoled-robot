@@ -3,10 +3,10 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 
-#include "data.h"
-#include "ui.h"
+#include "../../data.h"
+#include "../../ui/ui.h"
 #include "usage_rate.h"
-#include "hal/sound_hal.h"
+#include "../../hal/sound_hal.h"
 
 static UsageData usage = {};
 

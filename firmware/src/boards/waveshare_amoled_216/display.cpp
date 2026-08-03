@@ -1,6 +1,6 @@
 #include "../../hal/display_hal.h"
 #include "../../hal/imu_hal.h"
-#include "../../brightness.h"
+#include "../../apps/settings/brightness/brightness.h"
 #include "board.h"
 #include <Arduino.h>
 #include <Arduino_GFX_Library.h>

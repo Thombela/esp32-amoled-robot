@@ -1,8 +1,8 @@
 #include <Arduino.h>
 #include "idle.h"
 #include "idle_cfg.h"
-#include "hal/display_hal.h"
-#include "hal/power_hal.h"
+#include "../../hal/display_hal.h"
+#include "../../hal/power_hal.h"
 
 enum IdleState {
     STATE_AWAKE,

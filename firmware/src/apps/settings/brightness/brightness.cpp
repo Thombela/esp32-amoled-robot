@@ -1,5 +1,5 @@
 #include "brightness.h"
-#include "idle.h"
+#include "../../../core/idle/idle.h"
 #include <Preferences.h>
 #include <Arduino.h>
 

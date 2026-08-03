@@ -1,12 +1,14 @@
 #include "ui.h"
 #include <stdint.h>
 #include <lvgl.h>
-#include "icons.h"
-#include "backgrounds.h"
-#include "app_icons.h"
-#include "brightness.h"
-#include "wifi_poll.h"
-#include "hal/board_caps.h"
+#include "icons/icons.h"
+#include "backgrounds/backgrounds.h"
+#include "icons/app_icons.h"
+#include "../apps/claude/claude.h"
+#include "../apps/claude/claude_settings.h"
+#include "../apps/settings/settings.h"
+#include "../apps/settings/wifi/wifi_setup.h"
+#include "../hal/board_caps.h"
 
 // Custom fonts (scaled for 314 PPI, ~1.9x from original 165 PPI)
 LV_FONT_DECLARE(font_tiempos_56);
@@ -20,41 +22,9 @@ LV_FONT_DECLARE(font_styrene_12);
 // Layout values computed from the active board's geometry. Populated once
 // in ui_init() and treated as const for the rest of the program. Adding a
 // new display size means extending compute_layout() with another
-// breakpoint — never editing the screen-builder functions below.
-struct Layout {
-    int16_t scr_w, scr_h;
-    int16_t margin;
-    int16_t title_y;
-    int16_t content_w;
-    int16_t panel_pad_x, panel_pad_y;
-    const lv_font_t* title_font;
-    bool    small_icons;             // 24px battery (vs 48px) on small screens
-    int16_t batt_y;                  // battery icon top edge
-    int16_t batt_w;                  // battery icon width, for position math
-
-    // Claude tile (minimal daily/weekly %)
-    const lv_font_t* claude_label_font;
-    const lv_font_t* claude_pct_font;
-    int16_t claude_label1_y, claude_pct1_y;
-    int16_t claude_label2_y, claude_pct2_y;
-
-    // Settings tile
-    const lv_font_t* settings_key_font;
-    const lv_font_t* settings_value_font;
-    int16_t settings_row_h, settings_row_gap, settings_row1_y;
-
-    // Library tile: 2-column category card grid (derived lib_card_w/lib_row_stride below)
-    int16_t lib_card_y, lib_card_h, lib_card_gap, lib_card_w;
-    int16_t lib_icon_size, lib_row_stride;
-    const lv_font_t* lib_card_font;
-
-    // Category popup (folder contents)
-    int16_t popup_w, popup_h, popup_list_y;
-    int16_t popup_row_h, popup_row_gap, popup_icon_size;
-    const lv_font_t* popup_title_font;
-    const lv_font_t* popup_row_font;
-};
-static Layout L = {};
+// breakpoint — never editing the screen-builder functions below. Struct
+// definition lives in ui.h so apps/claude and apps/settings can read L too.
+Layout L = {};
 
 // Pick layout values from the active board's pixel dimensions. New ports
 // inherit the closer breakpoint — visually OK, may need a polish pass for
@@ -88,6 +58,12 @@ static void compute_layout(const BoardCaps& c) {
         L.popup_row_h = 108; L.popup_row_gap = 12; L.popup_icon_size = 72;
         L.popup_title_font = &font_styrene_24;
         L.popup_row_font   = &font_styrene_20;
+
+        L.wifi_row_font = &font_styrene_20;
+        L.wifi_row_h = 64; L.wifi_list_y = 100;
+        L.wifi_field_font = &font_styrene_24;
+        L.wifi_field_h = 56; L.wifi_field_gap = 16; L.wifi_fields_y = 110;
+        L.wifi_kb_h = 200;
     } else if (c.height >= 300) {
         // Compact layout — tuned for 368x448 (AMOLED-1.8).
         L.claude_label_font = &font_styrene_20;
@@ -105,6 +81,12 @@ static void compute_layout(const BoardCaps& c) {
         L.popup_row_h = 86; L.popup_row_gap = 10; L.popup_icon_size = 56;
         L.popup_title_font = &font_styrene_20;
         L.popup_row_font   = &font_styrene_14;
+
+        L.wifi_row_font = &font_styrene_14;
+        L.wifi_row_h = 52; L.wifi_list_y = 80;
+        L.wifi_field_font = &font_styrene_20;
+        L.wifi_field_h = 46; L.wifi_field_gap = 12; L.wifi_fields_y = 90;
+        L.wifi_kb_h = 180;
     } else {
         // Small layout — tuned for 240x240 (LCD-1.54 and similar square TFTs).
         L.margin = 8;
@@ -130,6 +112,12 @@ static void compute_layout(const BoardCaps& c) {
         L.popup_row_h = 56; L.popup_row_gap = 6; L.popup_icon_size = 34;
         L.popup_title_font = &font_styrene_14;
         L.popup_row_font   = &font_styrene_12;
+
+        L.wifi_row_font = &font_styrene_12;
+        L.wifi_row_h = 36; L.wifi_list_y = 40;
+        L.wifi_field_font = &font_styrene_14;
+        L.wifi_field_h = 32; L.wifi_field_gap = 8; L.wifi_fields_y = 44;
+        L.wifi_kb_h = 110;
     }
 
     L.content_w = L.scr_w - 2 * L.margin;
@@ -142,18 +130,6 @@ static void compute_layout(const BoardCaps& c) {
     L.lib_row_stride = L.lib_card_h + 8 + L.lib_card_font->line_height + L.lib_card_gap;
 }
 
-// Anthropic brand palette — design tokens live in theme.h
-#include "theme.h"
-#define COL_BG        THEME_BG
-#define COL_PANEL     THEME_PANEL
-#define COL_TEXT      THEME_TEXT
-#define COL_DIM       THEME_DIM
-#define COL_ACCENT    THEME_ACCENT
-#define COL_GREEN     THEME_GREEN
-#define COL_AMBER     THEME_AMBER
-#define COL_RED       THEME_RED
-#define COL_BAR_BG    THEME_BAR_BG
-
 // ---- Tileview: Home / Library ----
 static lv_obj_t* tileview;
 static lv_obj_t* tile_home;
@@ -165,16 +141,10 @@ static screen_t  current_screen = SCREEN_HOME;
 static lv_obj_t* overlay_claude;
 static lv_obj_t* overlay_settings;
 static lv_obj_t* overlay_placeholder;
+static lv_obj_t* overlay_wifi_setup;
+static lv_obj_t* overlay_wifi_credentials;
+static lv_obj_t* overlay_claude_settings;
 static lv_obj_t* lbl_placeholder_name;
-
-// ---- Claude tile (static mock data for now) ----
-static lv_obj_t* lbl_claude_daily_pct;
-static lv_obj_t* lbl_claude_weekly_pct;
-
-// ---- Settings tile ----
-static lv_obj_t* lbl_settings_brightness_value;
-static lv_obj_t* lbl_settings_ble_value;
-static lv_obj_t* lbl_settings_wifi_value;
 
 // ---- Battery indicator (shared, on top of every screen) ----
 static lv_obj_t* battery_img;
@@ -244,13 +214,7 @@ static lv_obj_t* popup_list;
 static void open_category_popup(AppCategory cat);
 static void open_app_screen(screen_t screen, const char* app_name);
 
-static lv_color_t pct_color(float pct) {
-    if (pct >= 80.0f) return COL_RED;
-    if (pct >= 50.0f) return COL_AMBER;
-    return COL_GREEN;
-}
-
-static lv_obj_t* make_panel(lv_obj_t* parent, int x, int y, int w, int h) {
+lv_obj_t* ui_make_panel(lv_obj_t* parent, int x, int y, int w, int h) {
     lv_obj_t* panel = lv_obj_create(parent);
     lv_obj_set_pos(panel, x, y);
     lv_obj_set_size(panel, w, h);
@@ -323,134 +287,6 @@ static void init_home_tile(lv_obj_t* tile) {
     lv_obj_set_pos(img, 0, 0);
 }
 
-// ======== Claude tile: minimal daily/weekly %, static mock data ========
-
-static void init_claude_tile(lv_obj_t* tile) {
-    lv_obj_set_style_bg_color(tile, COL_BG, 0);
-    lv_obj_set_style_bg_opa(tile, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(tile, 0, 0);
-    lv_obj_set_style_pad_all(tile, 0, 0);
-    lv_obj_clear_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t* l1 = lv_label_create(tile);
-    lv_label_set_text(l1, "Daily");
-    lv_obj_set_style_text_font(l1, L.claude_label_font, 0);
-    lv_obj_set_style_text_color(l1, COL_DIM, 0);
-    lv_obj_align(l1, LV_ALIGN_TOP_MID, 0, L.claude_label1_y);
-
-    // Static mock — not wired to live UsageData yet (see ui_update() below).
-    lbl_claude_daily_pct = lv_label_create(tile);
-    lv_label_set_text(lbl_claude_daily_pct, "42%");
-    lv_obj_set_style_text_font(lbl_claude_daily_pct, L.claude_pct_font, 0);
-    lv_obj_set_style_text_color(lbl_claude_daily_pct, pct_color(42.0f), 0);
-    lv_obj_align(lbl_claude_daily_pct, LV_ALIGN_TOP_MID, 0, L.claude_pct1_y);
-
-    lv_obj_t* l2 = lv_label_create(tile);
-    lv_label_set_text(l2, "Weekly");
-    lv_obj_set_style_text_font(l2, L.claude_label_font, 0);
-    lv_obj_set_style_text_color(l2, COL_DIM, 0);
-    lv_obj_align(l2, LV_ALIGN_TOP_MID, 0, L.claude_label2_y);
-
-    lbl_claude_weekly_pct = lv_label_create(tile);
-    lv_label_set_text(lbl_claude_weekly_pct, "68%");
-    lv_obj_set_style_text_font(lbl_claude_weekly_pct, L.claude_pct_font, 0);
-    lv_obj_set_style_text_color(lbl_claude_weekly_pct, pct_color(68.0f), 0);
-    lv_obj_align(lbl_claude_weekly_pct, LV_ALIGN_TOP_MID, 0, L.claude_pct2_y);
-}
-
-// ======== Settings tile: real brightness / BLE / WiFi status ========
-
-static void init_settings_tile(lv_obj_t* tile) {
-    lv_obj_set_style_bg_color(tile, COL_BG, 0);
-    lv_obj_set_style_bg_opa(tile, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(tile, 0, 0);
-    lv_obj_set_style_pad_all(tile, 0, 0);
-    // Vertical-only: a real scrollbar + bounce-at-the-end feedback makes it
-    // obvious there are exactly 3 rows and nothing is stuck, instead of a
-    // dead, unresponsive screen. Horizontal stays free for the swipe-left
-    // "back to Library" gesture (see back_gesture_cb).
-    lv_obj_add_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_scroll_dir(tile, LV_DIR_VER);
-
-    lv_obj_t* title = lv_label_create(tile);
-    lv_label_set_text(title, "Settings");
-    lv_obj_set_style_text_font(title, L.title_font, 0);
-    lv_obj_set_style_text_color(title, COL_TEXT, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, L.title_y);
-
-    int y = L.settings_row1_y;
-
-    lv_obj_t* p1 = make_panel(tile, L.margin, y, L.content_w, L.settings_row_h);
-    lv_obj_t* k1 = lv_label_create(p1);
-    lv_label_set_text(k1, "BRIGHTNESS");
-    lv_obj_set_style_text_font(k1, L.settings_key_font, 0);
-    lv_obj_set_style_text_color(k1, COL_DIM, 0);
-    lv_obj_set_pos(k1, 0, 0);
-    lbl_settings_brightness_value = lv_label_create(p1);
-    lv_obj_set_style_text_font(lbl_settings_brightness_value, L.settings_value_font, 0);
-    lv_obj_set_style_text_color(lbl_settings_brightness_value, COL_TEXT, 0);
-    lv_obj_set_pos(lbl_settings_brightness_value, 0, 30);
-    y += L.settings_row_h + L.settings_row_gap;
-
-    lv_obj_t* p2 = make_panel(tile, L.margin, y, L.content_w, L.settings_row_h);
-    lv_obj_t* k2 = lv_label_create(p2);
-    lv_label_set_text(k2, "BLUETOOTH");
-    lv_obj_set_style_text_font(k2, L.settings_key_font, 0);
-    lv_obj_set_style_text_color(k2, COL_DIM, 0);
-    lv_obj_set_pos(k2, 0, 0);
-    lbl_settings_ble_value = lv_label_create(p2);
-    lv_obj_set_style_text_font(lbl_settings_ble_value, L.settings_value_font, 0);
-    lv_obj_set_style_text_color(lbl_settings_ble_value, COL_TEXT, 0);
-    lv_obj_set_pos(lbl_settings_ble_value, 0, 30);
-    y += L.settings_row_h + L.settings_row_gap;
-
-    lv_obj_t* p3 = make_panel(tile, L.margin, y, L.content_w, L.settings_row_h);
-    lv_obj_t* k3 = lv_label_create(p3);
-    lv_label_set_text(k3, "WI-FI");
-    lv_obj_set_style_text_font(k3, L.settings_key_font, 0);
-    lv_obj_set_style_text_color(k3, COL_DIM, 0);
-    lv_obj_set_pos(k3, 0, 0);
-    lbl_settings_wifi_value = lv_label_create(p3);
-    lv_obj_set_style_text_font(lbl_settings_wifi_value, L.settings_value_font, 0);
-    lv_obj_set_style_text_color(lbl_settings_wifi_value, COL_TEXT, 0);
-    lv_obj_set_pos(lbl_settings_wifi_value, 0, 30);
-
-    ui_refresh_settings();
-}
-
-void ui_refresh_settings(void) {
-    if (!lbl_settings_brightness_value) return;  // tile not built yet
-
-    int pct = brightness_get() * 100 / 255;
-    lv_label_set_text_fmt(lbl_settings_brightness_value, "%d%%", pct);
-
-    ble_state_t bs = ble_get_state();
-    lv_obj_set_style_text_color(lbl_settings_ble_value,
-        bs == BLE_STATE_CONNECTED ? COL_GREEN : COL_DIM, 0);
-    if (bs == BLE_STATE_CONNECTED) {
-        const char* name = ble_get_device_name();
-        lv_label_set_text_fmt(lbl_settings_ble_value, "Connected\n%s",
-            name[0] ? name : ble_get_mac_address());
-    } else if (bs == BLE_STATE_ADVERTISING) {
-        lv_label_set_text(lbl_settings_ble_value, "Advertising");
-    } else if (bs == BLE_STATE_DISCONNECTED) {
-        lv_label_set_text(lbl_settings_ble_value, "Disconnected");
-    } else {
-        lv_label_set_text(lbl_settings_ble_value, "Initializing");
-    }
-
-    bool wifi_ok = wifi_poll_is_connected();
-    lv_obj_set_style_text_color(lbl_settings_wifi_value, wifi_ok ? COL_GREEN : COL_DIM, 0);
-    const char* ssid = wifi_poll_get_ssid();
-    if (!ssid[0]) {
-        lv_label_set_text(lbl_settings_wifi_value, "Not configured");
-    } else if (wifi_ok) {
-        lv_label_set_text_fmt(lbl_settings_wifi_value, "%s\n%s", ssid, wifi_poll_get_ip());
-    } else {
-        lv_label_set_text_fmt(lbl_settings_wifi_value, "%s\nConnecting...", ssid);
-    }
-}
-
 // ======== Placeholder tile: stub screen for apps with no real UI yet ========
 // (Social/Entertainment/Fitness/Photo — a testing scaffold, see the app/
 // category registry comment above.) One shared overlay for all of them;
@@ -504,11 +340,10 @@ static void init_library_tile(lv_obj_t* tile) {
     lv_obj_set_style_bg_opa(tile, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(tile, 0, 0);
     lv_obj_set_style_pad_all(tile, 0, 0);
-    // Vertical-only, same reasoning as Settings: a real scrollbar/bounce
-    // makes a 6-category (2x3) grid obviously scrollable instead of dead,
-    // and horizontal stays free for the tileview's own Home<->Library page.
-    lv_obj_add_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_scroll_dir(tile, LV_DIR_VER);
+    // The tile itself no longer scrolls — only `content` below does — so the
+    // background stays put underneath a scrolling category grid instead of
+    // scrolling away with it.
+    lv_obj_clear_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
 
     init_bg_dsc_rgb565(&library_bg_dsc, BG_LIBRARY_W, BG_LIBRARY_H, bg_library_data);
     lv_obj_t* bg = lv_image_create(tile);
@@ -516,7 +351,20 @@ static void init_library_tile(lv_obj_t* tile) {
     lv_obj_set_pos(bg, 0, 0);
     lv_obj_clear_flag(bg, LV_OBJ_FLAG_CLICKABLE);
 
-    lv_obj_t* title = lv_label_create(tile);
+    // Scrollable wrapper for everything that should scroll: title + grid.
+    // Vertical-only, same reasoning as Settings: a real scrollbar/bounce
+    // makes a 6-category (2x3) grid obviously scrollable instead of dead,
+    // and horizontal stays free for the tileview's own Home<->Library page.
+    lv_obj_t* content = lv_obj_create(tile);
+    lv_obj_set_pos(content, 0, 0);
+    lv_obj_set_size(content, L.scr_w, L.scr_h);
+    lv_obj_set_style_bg_opa(content, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(content, 0, 0);
+    lv_obj_set_style_pad_all(content, 0, 0);
+    lv_obj_add_flag(content, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(content, LV_DIR_VER);
+
+    lv_obj_t* title = lv_label_create(content);
     lv_label_set_text(title, "Library");
     lv_obj_set_style_text_font(title, L.title_font, 0);
     lv_obj_set_style_text_color(title, COL_TEXT, 0);
@@ -527,7 +375,7 @@ static void init_library_tile(lv_obj_t* tile) {
         int row = i / 2;
         int x = L.margin + col * (L.lib_card_w + L.lib_card_gap);
         int y = L.lib_card_y + row * L.lib_row_stride;
-        lv_obj_t* card = make_panel(tile, x, y, L.lib_card_w, L.lib_card_h);
+        lv_obj_t* card = ui_make_panel(content, x, y, L.lib_card_w, L.lib_card_h);
         // Frosted-glass look: translucent panel over the blurred bg behind it.
         lv_obj_set_style_bg_opa(card, LV_OPA_70, 0);
         lv_obj_set_style_radius(card, 20, 0);
@@ -544,7 +392,7 @@ static void init_library_tile(lv_obj_t* tile) {
 
         // Category name sits below (outside) the card block, like an app
         // name under its icon, rather than inside it.
-        lv_obj_t* label = lv_label_create(tile);
+        lv_obj_t* label = lv_label_create(content);
         lv_label_set_text(label, CATEGORIES[i].name);
         lv_obj_set_style_text_font(label, L.lib_card_font, 0);
         lv_obj_set_style_text_color(label, COL_TEXT, 0);
@@ -625,8 +473,8 @@ static void init_category_popup(lv_obj_t* scr) {
     lv_obj_add_event_cb(popup_scrim, popup_scrim_clicked_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_add_flag(popup_scrim, LV_OBJ_FLAG_HIDDEN);
 
-    popup_card = make_panel(popup_scrim, (L.scr_w - L.popup_w) / 2, (L.scr_h - L.popup_h) / 2,
-                             L.popup_w, L.popup_h);
+    popup_card = ui_make_panel(popup_scrim, (L.scr_w - L.popup_w) / 2, (L.scr_h - L.popup_h) / 2,
+                                L.popup_w, L.popup_h);
     lv_obj_set_style_radius(popup_card, 20, 0);
 
     popup_title = lv_label_create(popup_card);
@@ -648,40 +496,104 @@ static void init_category_popup(lv_obj_t* scr) {
 
 // ======== Navigation between Home / Library / popup / app screens ========
 
-static void close_to_library(void) {
+static void hide_all_overlays(void) {
     lv_obj_add_flag(popup_scrim, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(overlay_claude, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(overlay_settings, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(overlay_placeholder, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(overlay_wifi_setup, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(overlay_wifi_credentials, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(overlay_claude_settings, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void close_to_library(void) {
+    hide_all_overlays();
     lv_tileview_set_tile_by_index(tileview, 1, 0, LV_ANIM_OFF);
     current_screen = SCREEN_LIBRARY;
 }
 
-// Both app screens are full-screen with no chrome of their own, so "back" is
-// gesture-only: swipe left anywhere (bubbled up from any clickable child via
-// LV_OBJ_FLAG_GESTURE_BUBBLE, e.g. the settings row panels), or tap/swipe-up
-// the home-indicator bar — mirroring iOS's home-indicator swipe-to-exit.
-static void back_gesture_cb(lv_event_t* e) {
-    (void)e;
-    lv_indev_t* indev = lv_indev_active();
-    if (!indev) return;
-    if (lv_indev_get_gesture_dir(indev) & LV_DIR_LEFT) close_to_library();
+// The home-indicator bar always goes to the Home tile, mirroring iOS's own
+// home-indicator (it never means "back one level" — that's the top-left
+// back button's job, see make_back_button below).
+static void close_to_home(void) {
+    hide_all_overlays();
+    lv_tileview_set_tile_by_index(tileview, 0, 0, LV_ANIM_OFF);
+    current_screen = SCREEN_HOME;
+}
+
+// The WiFi setup screen is nested under Settings, not a Library app — its
+// own back target is Settings, not Library.
+static void close_to_settings(void) {
+    hide_all_overlays();
+    lv_obj_clear_flag(overlay_settings, LV_OBJ_FLAG_HIDDEN);
+    current_screen = SCREEN_SETTINGS;
+}
+
+// The credential entry screen is nested under the WiFi network list.
+static void close_to_wifi_setup(void) {
+    hide_all_overlays();
+    lv_obj_clear_flag(overlay_wifi_setup, LV_OBJ_FLAG_HIDDEN);
+    current_screen = SCREEN_WIFI_SETUP;
+}
+
+// The Claude settings screen is nested under the Claude tile itself.
+static void close_to_claude(void) {
+    hide_all_overlays();
+    lv_obj_clear_flag(overlay_claude, LV_OBJ_FLAG_HIDDEN);
+    current_screen = SCREEN_CLAUDE;
+}
+
+// Both app screens are full-screen with no chrome of their own: a top-left
+// back button (see make_back_button) goes back exactly one level; tapping
+// or swiping up the home-indicator bar always jumps to Home, regardless of
+// nesting depth — mirroring iOS, where the home indicator never means "back
+// one level". Each overlay registers its own "where does back go" target
+// (Library for most; Settings for the WiFi list; the WiFi list for
+// credential entry) via the event's user_data, rather than hardcoding one
+// destination.
+static void back_button_clicked_cb(lv_event_t* e) {
+    auto close_target = (void (*)(void))lv_event_get_user_data(e);
+    close_target();
+}
+
+// A small square button in the top-left corner (left of any app-specific
+// icons, which are shifted right to make room). Uses a plain "<" glyph
+// rather than an icon asset — the custom bitmap fonts only bake ASCII
+// 0x20-0x7E, and "<" reads clearly as "back" without needing a new PNG run
+// through the icon pipeline.
+static void make_back_button(lv_obj_t* parent, void (*close_target)(void)) {
+    int size = L.batt_w;
+    lv_obj_t* btn = lv_obj_create(parent);
+    lv_obj_set_size(btn, size, size);
+    lv_obj_set_pos(btn, L.margin, L.batt_y);
+    lv_obj_set_style_bg_color(btn, COL_PANEL, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(btn, 8, 0);
+    lv_obj_set_style_border_width(btn, 0, 0);
+    lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(btn, back_button_clicked_cb, LV_EVENT_CLICKED, (void*)close_target);
+
+    lv_obj_t* label = lv_label_create(btn);
+    lv_label_set_text(label, "<");
+    lv_obj_set_style_text_color(label, COL_TEXT, 0);
+    lv_obj_set_style_text_font(label, L.wifi_row_font, 0);
+    lv_obj_center(label);
 }
 
 static void home_indicator_cb(lv_event_t* e) {
     if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
-        close_to_library();
+        close_to_home();
         return;
     }
     lv_indev_t* indev = lv_indev_active();
     if (!indev) return;
     lv_dir_t dir = lv_indev_get_gesture_dir(indev);
-    if (dir & (LV_DIR_TOP | LV_DIR_LEFT)) close_to_library();
+    if (dir & (LV_DIR_TOP | LV_DIR_LEFT)) close_to_home();
 }
 
 // A centered, 50%-wide bar at the bottom of the screen — tap it, or swipe up
-// from it, to return to the Library grid. zone_h (the touch target, and the
-// space init_*_tile's content area leaves clear above it) is capped at 10%
+// from it, to jump straight to Home. zone_h (the touch target, and the
+// space init_*_tile's content area leaves clear above it) is capped at 5%
 // of screen height; the visible bar itself stays a slim iOS-style pill
 // within that target rather than filling the whole target with color.
 static void make_home_indicator(lv_obj_t* parent, int zone_h) {
@@ -691,6 +603,14 @@ static void make_home_indicator(lv_obj_t* parent, int zone_h) {
     lv_obj_set_style_border_width(zone, 0, 0);
     lv_obj_set_style_pad_all(zone, 0, 0);
     lv_obj_clear_flag(zone, LV_OBJ_FLAG_SCROLLABLE);
+    // Every LVGL object bubbles gestures to its parent by default (the flag
+    // is set automatically on creation) — the bubble walk only stops at the
+    // first ancestor WITHOUT the flag. Clearing it here makes `zone` itself
+    // that stopping point, so a swipe starting on the indicator bar reaches
+    // home_indicator_cb directly instead of continuing up to the overlay
+    // (and past that, since overlays clear it too — see below — all the way
+    // to the screen root, where nothing is listening).
+    lv_obj_clear_flag(zone, LV_OBJ_FLAG_GESTURE_BUBBLE);
     lv_obj_set_size(zone, zone_w, zone_h);
     lv_obj_set_pos(zone, (L.scr_w - zone_w) / 2, L.scr_h - zone_h);
     lv_obj_add_event_cb(zone, home_indicator_cb, LV_EVENT_GESTURE, NULL);
@@ -708,10 +628,7 @@ static void make_home_indicator(lv_obj_t* parent, int zone_h) {
 }
 
 static void open_app_screen(screen_t screen, const char* app_name) {
-    lv_obj_add_flag(popup_scrim, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(overlay_claude, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(overlay_settings, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(overlay_placeholder, LV_OBJ_FLAG_HIDDEN);
+    hide_all_overlays();
 
     lv_obj_t* target = overlay_placeholder;
     if (screen == SCREEN_CLAUDE) target = overlay_claude;
@@ -765,7 +682,7 @@ void ui_init(void) {
     // target (see make_home_indicator) free — keeps that strip out of
     // Settings' own scrollable area so the two gestures never fight over
     // the touch.
-    int zone_h = L.scr_h / 10;  // touch target, capped at 10% of screen height
+    int zone_h = L.scr_h / 20;  // touch target, capped at 5% of screen height
 
     overlay_claude = lv_obj_create(scr);
     lv_obj_set_pos(overlay_claude, 0, 0);
@@ -778,10 +695,26 @@ void ui_init(void) {
     lv_obj_t* claude_content = lv_obj_create(overlay_claude);
     lv_obj_set_pos(claude_content, 0, 0);
     lv_obj_set_size(claude_content, L.scr_w, L.scr_h - zone_h);
-    init_claude_tile(claude_content);
-    lv_obj_add_event_cb(overlay_claude, back_gesture_cb, LV_EVENT_GESTURE, NULL);
+    claude_screen_init(claude_content);
+    make_back_button(overlay_claude, close_to_library);
     make_home_indicator(overlay_claude, zone_h);
     lv_obj_add_flag(overlay_claude, LV_OBJ_FLAG_HIDDEN);
+
+    overlay_claude_settings = lv_obj_create(scr);
+    lv_obj_set_pos(overlay_claude_settings, 0, 0);
+    lv_obj_set_size(overlay_claude_settings, L.scr_w, L.scr_h);
+    lv_obj_set_style_bg_color(overlay_claude_settings, COL_BG, 0);
+    lv_obj_set_style_bg_opa(overlay_claude_settings, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(overlay_claude_settings, 0, 0);
+    lv_obj_set_style_pad_all(overlay_claude_settings, 0, 0);
+    lv_obj_clear_flag(overlay_claude_settings, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t* claude_settings_content = lv_obj_create(overlay_claude_settings);
+    lv_obj_set_pos(claude_settings_content, 0, 0);
+    lv_obj_set_size(claude_settings_content, L.scr_w, L.scr_h - zone_h);
+    claude_settings_screen_init(claude_settings_content);
+    make_back_button(overlay_claude_settings, close_to_claude);
+    make_home_indicator(overlay_claude_settings, zone_h);
+    lv_obj_add_flag(overlay_claude_settings, LV_OBJ_FLAG_HIDDEN);
 
     overlay_settings = lv_obj_create(scr);
     lv_obj_set_pos(overlay_settings, 0, 0);
@@ -794,8 +727,8 @@ void ui_init(void) {
     lv_obj_t* settings_content = lv_obj_create(overlay_settings);
     lv_obj_set_pos(settings_content, 0, 0);
     lv_obj_set_size(settings_content, L.scr_w, L.scr_h - zone_h);
-    init_settings_tile(settings_content);
-    lv_obj_add_event_cb(overlay_settings, back_gesture_cb, LV_EVENT_GESTURE, NULL);
+    settings_screen_init(settings_content);
+    make_back_button(overlay_settings, close_to_library);
     make_home_indicator(overlay_settings, zone_h);
     lv_obj_add_flag(overlay_settings, LV_OBJ_FLAG_HIDDEN);
 
@@ -811,9 +744,41 @@ void ui_init(void) {
     lv_obj_set_pos(placeholder_content, 0, 0);
     lv_obj_set_size(placeholder_content, L.scr_w, L.scr_h - zone_h);
     init_placeholder_tile(placeholder_content);
-    lv_obj_add_event_cb(overlay_placeholder, back_gesture_cb, LV_EVENT_GESTURE, NULL);
+    make_back_button(overlay_placeholder, close_to_library);
     make_home_indicator(overlay_placeholder, zone_h);
     lv_obj_add_flag(overlay_placeholder, LV_OBJ_FLAG_HIDDEN);
+
+    overlay_wifi_setup = lv_obj_create(scr);
+    lv_obj_set_pos(overlay_wifi_setup, 0, 0);
+    lv_obj_set_size(overlay_wifi_setup, L.scr_w, L.scr_h);
+    lv_obj_set_style_bg_color(overlay_wifi_setup, COL_BG, 0);
+    lv_obj_set_style_bg_opa(overlay_wifi_setup, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(overlay_wifi_setup, 0, 0);
+    lv_obj_set_style_pad_all(overlay_wifi_setup, 0, 0);
+    lv_obj_clear_flag(overlay_wifi_setup, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t* wifi_setup_content = lv_obj_create(overlay_wifi_setup);
+    lv_obj_set_pos(wifi_setup_content, 0, 0);
+    lv_obj_set_size(wifi_setup_content, L.scr_w, L.scr_h - zone_h);
+    wifi_setup_screen_init(wifi_setup_content);
+    make_back_button(overlay_wifi_setup, close_to_settings);
+    make_home_indicator(overlay_wifi_setup, zone_h);
+    lv_obj_add_flag(overlay_wifi_setup, LV_OBJ_FLAG_HIDDEN);
+
+    overlay_wifi_credentials = lv_obj_create(scr);
+    lv_obj_set_pos(overlay_wifi_credentials, 0, 0);
+    lv_obj_set_size(overlay_wifi_credentials, L.scr_w, L.scr_h);
+    lv_obj_set_style_bg_color(overlay_wifi_credentials, COL_BG, 0);
+    lv_obj_set_style_bg_opa(overlay_wifi_credentials, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(overlay_wifi_credentials, 0, 0);
+    lv_obj_set_style_pad_all(overlay_wifi_credentials, 0, 0);
+    lv_obj_clear_flag(overlay_wifi_credentials, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t* wifi_credentials_content = lv_obj_create(overlay_wifi_credentials);
+    lv_obj_set_pos(wifi_credentials_content, 0, 0);
+    lv_obj_set_size(wifi_credentials_content, L.scr_w, L.scr_h - zone_h);
+    wifi_credentials_screen_init(wifi_credentials_content);
+    make_back_button(overlay_wifi_credentials, close_to_wifi_setup);
+    make_home_indicator(overlay_wifi_credentials, zone_h);
+    lv_obj_add_flag(overlay_wifi_credentials, LV_OBJ_FLAG_HIDDEN);
 
     // Category popup — also a full-screen overlay (scrim + centered card).
     init_category_popup(scr);
@@ -833,13 +798,20 @@ void ui_init(void) {
 
 void ui_update(const UsageData* data) {
     (void)data;
-    // Claude tile shows static mock daily/weekly % (see init_claude_tile) — not
-    // wired to live data yet, per product decision (deferred until the user's
-    // own web-API/WiFi setup is finished). Wire data->session_pct/weekly_pct
-    // into lbl_claude_daily_pct/lbl_claude_weekly_pct here when ready.
+    // UsageData (BLE/wifi_poll's fuller daemon schema) is intentionally
+    // unrelated to the Claude tile's daily/weekly % — that's now driven by
+    // apps/claude/claude_poll.cpp's own independent {daily, weekly} fetch
+    // (see claude_screen_update()), by product decision. This callback stays
+    // a no-op unless UsageData grows a use elsewhere.
 }
 
 void ui_tick(void) {
+    // Drives the WiFi setup screen's async scan poll + post-Connect status
+    // poll; a cheap no-op when neither is in flight, so no visibility check
+    // is needed here (unlike the Settings refresh below).
+    wifi_setup_tick();
+    claude_screen_tick();
+
     // WiFi has no push-on-change event today (unlike brightness/BLE, which
     // already trigger their own refresh on state change) — poll it at ~1Hz
     // while the user is actually looking at Settings.
@@ -852,10 +824,7 @@ void ui_tick(void) {
 }
 
 void ui_show_screen(screen_t screen) {
-    lv_obj_add_flag(popup_scrim, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(overlay_claude, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(overlay_settings, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(overlay_placeholder, LV_OBJ_FLAG_HIDDEN);
+    hide_all_overlays();
 
     if (screen == SCREEN_CLAUDE || screen == SCREEN_SETTINGS) {
         lv_tileview_set_tile_by_index(tileview, 1, 0, LV_ANIM_OFF);
@@ -893,4 +862,33 @@ void ui_update_battery(int percent, bool charging) {
         idx = 3;
     }
     lv_image_set_src(battery_img, &battery_dscs[idx]);
+}
+
+void ui_refresh_settings(void) {
+    settings_screen_refresh();
+}
+
+void ui_open_wifi_setup(void) {
+    hide_all_overlays();
+    lv_obj_clear_flag(overlay_wifi_setup, LV_OBJ_FLAG_HIDDEN);
+    current_screen = SCREEN_WIFI_SETUP;
+    wifi_setup_screen_open();  // triggers a fresh scan every time it's opened
+}
+
+void ui_open_wifi_credentials(const char* ssid, bool secured, bool enterprise) {
+    wifi_credentials_screen_open(ssid, secured, enterprise);
+    hide_all_overlays();
+    lv_obj_clear_flag(overlay_wifi_credentials, LV_OBJ_FLAG_HIDDEN);
+    current_screen = SCREEN_WIFI_SETUP;
+}
+
+void ui_close_wifi_credentials(void) {
+    close_to_wifi_setup();
+}
+
+void ui_open_claude_settings(void) {
+    claude_settings_screen_open();
+    hide_all_overlays();
+    lv_obj_clear_flag(overlay_claude_settings, LV_OBJ_FLAG_HIDDEN);
+    current_screen = SCREEN_CLAUDE;
 }
